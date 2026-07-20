@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# DB e documentos locais
+loja.db
+documentos/
+
+# Arquivos de notas locais
+*.md.bak
+plan.md
+app.py.md
+data.py.md
+main.py.md
+ui.py.md
