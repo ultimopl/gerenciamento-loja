@@ -43,11 +43,14 @@ def init_db():
                 corpo  TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS consultas (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                cliente_id INTEGER REFERENCES clientes(id) ON DELETE CASCADE,
-                data_hora  TEXT NOT NULL,
-                motivo     TEXT,
-                status     TEXT DEFAULT 'Agendada'
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                cliente_id    INTEGER REFERENCES clientes(id) ON DELETE CASCADE,
+                profissional  TEXT,
+                data_hora     TEXT NOT NULL,
+                motivo        TEXT,
+                compareceu    INTEGER,
+                remarcado_de  INTEGER REFERENCES consultas(id),
+                status        TEXT DEFAULT 'Agendada'
             );
         """)
 
@@ -201,54 +204,96 @@ def excluir_template(id: int):
 
 # ── Consultas ────────────────────────────────────────────────────────────────
 
+_CONSULTA_SELECT = """
+    SELECT c.*, cl.nome AS cliente_nome
+    FROM consultas c
+    JOIN clientes cl ON cl.id = c.cliente_id
+"""
+
+
 def listar_consultas(busca: str = "") -> list[dict]:
     with _connect() as conn:
         if busca:
             like = f"%{busca}%"
             rows = conn.execute(
-                """SELECT c.*, cl.nome AS cliente_nome
-                   FROM consultas c
-                   JOIN clientes cl ON cl.id = c.cliente_id
-                   WHERE cl.nome LIKE ? OR c.motivo LIKE ? OR c.data_hora LIKE ?
-                   ORDER BY c.data_hora""",
-                (like, like, like),
+                _CONSULTA_SELECT +
+                "WHERE cl.nome LIKE ? OR c.motivo LIKE ? OR c.data_hora LIKE ? OR c.profissional LIKE ?"
+                " ORDER BY c.data_hora",
+                (like, like, like, like),
             ).fetchall()
         else:
-            rows = conn.execute(
-                """SELECT c.*, cl.nome AS cliente_nome
-                   FROM consultas c
-                   JOIN clientes cl ON cl.id = c.cliente_id
-                   ORDER BY c.data_hora"""
-            ).fetchall()
+            rows = conn.execute(_CONSULTA_SELECT + "ORDER BY c.data_hora").fetchall()
     return [dict(r) for r in rows]
 
 
 def obter_consulta(id: int) -> dict | None:
     with _connect() as conn:
         row = conn.execute(
-            """SELECT c.*, cl.nome AS cliente_nome
-               FROM consultas c
-               JOIN clientes cl ON cl.id = c.cliente_id
-               WHERE c.id = ?""",
-            (id,),
+            _CONSULTA_SELECT + "WHERE c.id = ?", (id,)
         ).fetchone()
     return dict(row) if row else None
+
+
+def consultas_proximas(minutos: int = 30) -> list[dict]:
+    """Retorna consultas com status 'Agendada' nos próximos `minutos` minutos."""
+    with _connect() as conn:
+        rows = conn.execute(
+            _CONSULTA_SELECT +
+            "WHERE c.status = 'Agendada'"
+            "  AND c.data_hora BETWEEN datetime('now', 'localtime')"
+            "                      AND datetime('now', 'localtime', ? || ' minutes')"
+            " ORDER BY c.data_hora",
+            (str(minutos),),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def salvar_consulta(dados: dict) -> int:
     with _connect() as conn:
         if dados.get("id"):
             conn.execute(
-                "UPDATE consultas SET cliente_id=?, data_hora=?, motivo=?, status=? WHERE id=?",
-                (dados["cliente_id"], dados["data_hora"], dados.get("motivo"), dados.get("status", "Agendada"), dados["id"]),
+                """UPDATE consultas
+                   SET cliente_id=?, profissional=?, data_hora=?, motivo=?,
+                       compareceu=?, status=?
+                   WHERE id=?""",
+                (
+                    dados["cliente_id"], dados.get("profissional"),
+                    dados["data_hora"], dados.get("motivo"),
+                    dados.get("compareceu"), dados.get("status", "Agendada"),
+                    dados["id"],
+                ),
             )
             return dados["id"]
         else:
             cur = conn.execute(
-                "INSERT INTO consultas (cliente_id, data_hora, motivo, status) VALUES (?,?,?,?)",
-                (dados["cliente_id"], dados["data_hora"], dados.get("motivo"), dados.get("status", "Agendada")),
+                """INSERT INTO consultas
+                   (cliente_id, profissional, data_hora, motivo, compareceu, remarcado_de, status)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (
+                    dados["cliente_id"], dados.get("profissional"),
+                    dados["data_hora"], dados.get("motivo"),
+                    dados.get("compareceu"), dados.get("remarcado_de"),
+                    dados.get("status", "Agendada"),
+                ),
             )
             return cur.lastrowid
+
+
+def remarcar_consulta(id_original: int, nova: dict) -> int:
+    """Marca consulta original como Remarcada e insere nova vinculada."""
+    with _connect() as conn:
+        conn.execute("UPDATE consultas SET status='Remarcada' WHERE id=?", (id_original,))
+        cur = conn.execute(
+            """INSERT INTO consultas
+               (cliente_id, profissional, data_hora, motivo, remarcado_de, status)
+               VALUES (?,?,?,?,?,?)""",
+            (
+                nova["cliente_id"], nova.get("profissional"),
+                nova["data_hora"], nova.get("motivo"),
+                id_original, "Agendada",
+            ),
+        )
+        return cur.lastrowid
 
 
 def excluir_consulta(id: int):
