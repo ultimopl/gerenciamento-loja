@@ -1,12 +1,28 @@
 import subprocess
+import sys
 import threading
 import time
 
 import data
 
-_INTERVALO_SEG = 5 * 60   # checa a cada 5 minutos
-_ANTECEDENCIA  = 30        # notifica 30 min antes
+_INTERVALO_SEG = 5 * 60
+_ANTECEDENCIA  = 30
 _notificadas: set[int] = set()
+
+
+def _notificar(titulo: str, msg: str):
+    if sys.platform == "win32":
+        try:
+            from ctypes import windll
+            windll.user32.MessageBoxW(0, msg, titulo, 0x40)
+        except Exception:
+            pass
+    else:
+        subprocess.Popen(
+            ["notify-send", "--urgency=normal", "--icon=appointment-new", titulo, msg],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 
 def _checar():
@@ -20,12 +36,7 @@ def _checar():
             msg += f"\nProfissional: {c['profissional']}"
         if c.get("motivo"):
             msg += f"\nMotivo: {c['motivo']}"
-        subprocess.Popen(
-            ["notify-send", "--urgency=normal", "--icon=appointment-new",
-             "Consulta em 30 minutos", msg],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        _notificar("Consulta em 30 minutos", msg)
 
 
 def _loop():
